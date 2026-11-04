@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>QuickPwd</title>
+  <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="manager.css">
+</head>
+<body>
+  <header class="titlebar" data-tauri-drag-region>
+    <div class="tb-brand" data-tauri-drag-region>
+      <span class="logo" id="logo"></span>
+      <span data-tauri-drag-region>QuickPwd</span>
+    </div>
+    <div class="tb-buttons">
+      <button id="btn-min" title="最小化"></button>
+      <button id="btn-max" title="最大化"></button>
+      <button id="btn-close" class="close" title="关闭（程序继续在托盘运行）"></button>
+    </div>
+  </header>
+
+  <main>
+    <div class="head">
+      <div>
+        <h1>我的条目</h1>
+        <p class="subtitle" id="subtitle"></p>
+      </div>
+      <button class="btn primary" id="btn-add"></button>
+    </div>
+
+    <div id="banners"></div>
+
+    <div class="toolbar">
+      <label class="filter">
+        <span id="filter-icon"></span>
+        <input id="filter" type="text" placeholder="筛选标题" spellcheck="false" autocomplete="off">
+        <kbd>Ctrl F</kbd>
+      </label>
+    </div>
+
+    <div class="table">
+      <div class="thead">
+        <span></span><span>标题</span><span>内容</span><span></span>
+      </div>
+      <div class="tbody" id="tbody"></div>
+    </div>
+  </main>
+
+  <footer class="statusbar">
+    <div class="sb-left">
+      <span class="chip" id="hotkey-chip"></span>
+      <span id="count"></span>
+    </div>
+    <label class="switch-row">
+      <span>开机自启</span>
+      <input type="checkbox" id="autostart">
+      <span class="switch"></span>
+    </label>
+  </footer>
+
+  <!-- 新增 / 编辑 -->
+  <div class="overlay" id="edit-overlay">
+    <form class="dialog" id="edit-form" autocomplete="off">
+      <h2 id="edit-title">新增条目</h2>
+      <p class="dialog-sub">内容经 Windows DPAPI 加密保存在本机，不会上传</p>
+      <label class="field">
+        <span>标题</span>
+        <input id="f-title" type="text" placeholder="搜索时输入的名字，例如 github" spellcheck="false">
+      </label>
+      <label class="field">
+        <span class="field-head">
+          内容
+          <span class="field-tools">
+            <button type="button" class="icon-btn" id="btn-eye" title="显示 / 隐藏"></button>
+            <button type="button" class="icon-btn" id="btn-gen" title="生成随机密码"></button>
+          </span>
+        </span>
+        <textarea id="f-content" rows="4" spellcheck="false" placeholder="回车复制的就是这里的文本"></textarea>
+      </label>
+      <p class="form-error" id="f-error"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="btn-cancel">取消</button>
+        <button type="submit" class="btn primary">保存 <kbd>Ctrl ↵</kbd></button>
+      </div>
+    </form>
+  </div>
+
+  <!-- 删除确认 -->
+  <div class="overlay" id="del-overlay">
+    <div class="dialog small">
+      <h2>删除条目</h2>
+      <p class="dialog-sub" id="del-text"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="del-cancel">取消</button>
+        <button type="button" class="btn danger" id="del-ok">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="common.js"></script>
+  <script src="manager.js"></script>
+</body>
+</html>

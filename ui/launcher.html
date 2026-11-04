@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>QuickPwd</title>
+  <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="launcher.css">
+</head>
+<body class="solid">
+  <div class="shell">
+    <div class="search">
+      <span class="search-icon" id="search-icon"></span>
+      <input id="q" type="text" placeholder="输入标题搜索…" spellcheck="false" autocomplete="off">
+      <span class="count" id="count"></span>
+    </div>
+    <div class="list" id="list"></div>
+    <div class="footer">
+      <div class="brand" id="status">
+        <span class="logo" id="logo"></span>
+        <span id="status-text">QuickPwd</span>
+      </div>
+      <div class="hints">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span><kbd>↵</kbd> 复制</span>
+        <span><kbd>Esc</kbd> 关闭</span>
+      </div>
+    </div>
+    <div class="done" id="done">
+      <div class="done-badge" id="done-badge"></div>
+      <div class="done-title" id="done-title">已复制</div>
+      <div class="done-sub" id="done-sub"></div>
+    </div>
+  </div>
+  <script src="common.js"></script>
+  <script src="launcher.js"></script>
+</body>
+</html>

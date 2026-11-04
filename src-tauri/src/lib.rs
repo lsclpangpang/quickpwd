@@ -1,4 +1,5 @@
 mod clipboard;
+mod settings;
 mod store;
 
 use serde::{Deserialize, Serialize};
@@ -8,18 +9,18 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewWindow, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const CLEAR_AFTER_SECS: u64 = 30;
 const AUTOSTART_ARG: &str = "--autostart";
 
-// 按顺序尝试，注册第一个可用的组合键（Alt+Space 被其他程序占用时依次降级）
-const HOTKEY_CANDIDATES: &[(&str, Modifiers)] = &[
-    ("Alt + Space", Modifiers::ALT),
-    ("Ctrl + Alt + Space", Modifiers::CONTROL.union(Modifiers::ALT)),
-    ("Ctrl + Shift + Space", Modifiers::CONTROL.union(Modifiers::SHIFT)),
-    ("Shift + Alt + Space", Modifiers::SHIFT.union(Modifiers::ALT)),
-    ("Win + Alt + Space", Modifiers::SUPER.union(Modifiers::ALT)),
+// 用户未设置或设置的热键被占用时，按顺序尝试这些组合键
+const HOTKEY_FALLBACKS: &[&str] = &[
+    "Alt+Space",
+    "Control+Alt+Space",
+    "Control+Shift+Space",
+    "Shift+Alt+Space",
+    "Super+Alt+Space",
 ];
 
 #[derive(Default)]
@@ -27,7 +28,10 @@ struct AppState {
     store: Mutex<store::Store>,
     // 数据文件读取失败时禁止写入，防止用空库覆盖原文件
     load_error: Mutex<Option<String>>,
+    // 当前已注册的热键（accelerator 字符串）
     hotkey: Mutex<Option<String>>,
+    // 启动时用户设置的热键被占用、临时改用备选时的提示
+    hotkey_notice: Mutex<Option<String>>,
     appearance: Mutex<String>,
 }
 
@@ -41,6 +45,8 @@ struct EntryInput {
 struct AppInfo {
     version: String,
     hotkey: Option<String>,
+    hotkey_label: Option<String>,
+    hotkey_notice: Option<String>,
     autostart: bool,
     appearance: String,
     clear_after: u64,
@@ -129,6 +135,8 @@ fn app_info(app: AppHandle, state: State<AppState>) -> AppInfo {
     AppInfo {
         version: app.package_info().version.to_string(),
         hotkey: state.hotkey.lock().unwrap().clone(),
+        hotkey_label: state.hotkey.lock().unwrap().as_deref().map(hotkey_label),
+        hotkey_notice: state.hotkey_notice.lock().unwrap().clone(),
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         appearance: state.appearance.lock().unwrap().clone(),
         clear_after: CLEAR_AFTER_SECS,
@@ -143,6 +151,39 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     let res = if enabled { al.enable() } else { al.disable() };
     res.map_err(|e| format!("设置开机自启失败: {e}"))?;
     Ok(al.is_enabled().unwrap_or(enabled))
+}
+
+/// 录制新热键期间暂停当前热键，避免按到同一组合时唤出搜索框
+#[tauri::command]
+fn suspend_hotkey(app: AppHandle) {
+    let _ = app.global_shortcut().unregister_all();
+}
+
+#[tauri::command]
+fn resume_hotkey(app: AppHandle, state: State<AppState>) {
+    if let Some(acc) = state.hotkey.lock().unwrap().clone() {
+        let _ = try_register(&app, &acc);
+    }
+}
+
+#[tauri::command]
+fn set_hotkey(app: AppHandle, state: State<AppState>, accelerator: String) -> Result<String, String> {
+    let shortcut: Shortcut = accelerator.parse().map_err(|e| format!("无法识别的组合键「{accelerator}」: {e}"))?;
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    if gs.register(shortcut).is_err() {
+        // 恢复原热键
+        if let Some(old) = state.hotkey.lock().unwrap().clone() {
+            let _ = try_register(&app, &old);
+        }
+        return Err(format!("「{}」已被其他程序占用，请换一个组合", hotkey_label(&accelerator)));
+    }
+    let mut cfg = settings::load();
+    cfg.hotkey = Some(accelerator.clone());
+    settings::save(&cfg)?;
+    *state.hotkey.lock().unwrap() = Some(accelerator.clone());
+    *state.hotkey_notice.lock().unwrap() = None;
+    Ok(hotkey_label(&accelerator))
 }
 
 #[tauri::command]
@@ -218,13 +259,43 @@ fn apply_launcher_backdrop(w: &WebviewWindow) -> &'static str {
     "solid"
 }
 
-fn register_hotkey(app: &AppHandle) -> Option<String> {
-    for (name, mods) in HOTKEY_CANDIDATES {
-        if app.global_shortcut().register(Shortcut::new(Some(*mods), Code::Space)).is_ok() {
-            return Some((*name).to_string());
+/// "Control+Shift+KeyK" -> "Ctrl + Shift + K"
+fn hotkey_label(acc: &str) -> String {
+    acc.split('+')
+        .map(|t| match t {
+            "Control" => "Ctrl".to_string(),
+            "Super" => "Win".to_string(),
+            "Backquote" => "`".to_string(),
+            t if t.starts_with("Key") && t.len() == 4 => t[3..].to_string(),
+            t if t.starts_with("Digit") && t.len() == 6 => t[5..].to_string(),
+            t => t.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+fn try_register(app: &AppHandle, acc: &str) -> bool {
+    acc.parse::<Shortcut>().map(|sc| app.global_shortcut().register(sc).is_ok()).unwrap_or(false)
+}
+
+/// 先用用户设置的热键，失败再依次尝试备选；返回 (已注册的热键, 提示)
+fn register_hotkey(app: &AppHandle) -> (Option<String>, Option<String>) {
+    let preferred = settings::load().hotkey;
+    if let Some(acc) = &preferred {
+        if try_register(app, acc) {
+            return (Some(acc.clone()), None);
         }
     }
-    None
+    let fallback = HOTKEY_FALLBACKS.iter().find(|acc| try_register(app, acc)).map(|s| s.to_string());
+    let notice = match (&preferred, &fallback) {
+        (Some(p), Some(f)) => Some(format!(
+            "你设置的「{}」被其他程序占用，已临时改用「{}」",
+            hotkey_label(p),
+            hotkey_label(f)
+        )),
+        _ => None,
+    };
+    (fallback, notice)
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -279,7 +350,9 @@ pub fn run() {
                 Ok(s) => *state.store.lock().unwrap() = s,
                 Err(e) => *state.load_error.lock().unwrap() = Some(e),
             }
-            *state.hotkey.lock().unwrap() = register_hotkey(&handle);
+            let (hotkey, notice) = register_hotkey(&handle);
+            *state.hotkey.lock().unwrap() = hotkey;
+            *state.hotkey_notice.lock().unwrap() = notice;
 
             if let Some(w) = app.get_webview_window("launcher") {
                 *state.appearance.lock().unwrap() = apply_launcher_backdrop(&w).to_string();
@@ -317,6 +390,9 @@ pub fn run() {
             copy_entry,
             app_info,
             set_autostart,
+            suspend_hotkey,
+            resume_hotkey,
+            set_hotkey,
             open_manager,
             hide_launcher,
             quit_app,

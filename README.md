@@ -2,7 +2,7 @@
 
 Windows 上用快捷键唤出的文本速贴工具，交互类似 Alfred / Raycast：
 
-1. 按 **Alt + Space** 唤出搜索框
+1. 按 **Alt + Space**（可自定义）唤出搜索框
 2. 输入标题关键字，模糊过滤
 3. `↑` `↓` 选择，**回车**复制内容，然后自己粘贴
 
@@ -10,7 +10,8 @@ Windows 上用快捷键唤出的文本速贴工具，交互类似 Alfred / Rayca
 
 ## 功能
 
-- 全局热键 Alt + Space；如果被占用，会依次尝试 Ctrl+Alt+Space、Ctrl+Shift+Space、Shift+Alt+Space、Win+Alt+Space
+- 全局热键默认 Alt + Space，可在管理窗口左下角点击修改（直接按下想要的组合键）；设置保存在 `%USERPROFILE%\.quickpwd\settings.json`
+- 设置的热键被其他程序占用时，会依次尝试 Alt+Space、Ctrl+Alt+Space、Ctrl+Shift+Space 等备选，并在管理窗口提示
 - 搜索框使用 Win11 Mica / Win10 Acrylic 毛玻璃背景，失焦自动隐藏
 - 复制的内容不进 Win+V 剪贴板历史，也不参与云同步；30 秒后自动清空剪贴板（这期间你自己复制了别的内容就不清）
 - 数据经 Windows DPAPI 加密保存在 `%USERPROFILE%\.quickpwd\store.dat`，只有当前 Windows 账户能解开

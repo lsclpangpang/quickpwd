@@ -11,7 +11,10 @@ $("btn-gen").innerHTML = svgIcon("dice");
 
 $("btn-min").onclick = () => win.minimize();
 $("btn-max").onclick = () => win.toggleMaximize();
-$("btn-close").onclick = () => win.hide();
+$("btn-close").onclick = () => {
+  if ($("hk-overlay").classList.contains("show")) closeHotkeyDialog();
+  win.hide();
+};
 
 let entries = [];
 let selected = null;
@@ -220,7 +223,12 @@ async function loadInfo() {
   const info = await invoke("app_info");
   const chip = $("hotkey-chip");
   chip.classList.toggle("bad", !info.hotkey);
-  chip.textContent = info.hotkey ? `${info.hotkey} 唤出搜索` : "全局热键未注册";
+  chip.innerHTML = "";
+  chip.append(info.hotkey_label ? `${info.hotkey_label} 唤出搜索` : "全局热键未注册，点击设置");
+  const hint = document.createElement("span");
+  hint.className = "edit-hint";
+  hint.textContent = " · 修改";
+  if (info.hotkey_label) chip.appendChild(hint);
   $("autostart").checked = info.autostart;
 
   const banners = $("banners");
@@ -228,8 +236,11 @@ async function loadInfo() {
   if (info.load_error) {
     banners.appendChild(banner("err", `${info.load_error}（数据目录：${info.data_dir}）。为保护原文件，当前已禁止修改。`));
   }
+  if (info.hotkey_notice) {
+    banners.appendChild(banner("warn", `${info.hotkey_notice}。可点击左下角重新设置。`));
+  }
   if (!info.hotkey) {
-    banners.appendChild(banner("warn", "Alt+Space、Ctrl+Alt+Space 等组合键都被其他程序占用，无法唤出搜索框。请关闭占用热键的程序后重启 QuickPwd。"));
+    banners.appendChild(banner("warn", "常用组合键都被其他程序占用，无法唤出搜索框。请点击左下角设置一个未被占用的快捷键。"));
   }
 }
 
@@ -263,8 +274,119 @@ function toast(text, kind = "") {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
 }
 
+// ---------------- 快捷键设置 ----------------
+const MOD_ORDER = [["ctrlKey", "Control", "Ctrl"], ["altKey", "Alt", "Alt"], ["shiftKey", "Shift", "Shift"], ["metaKey", "Super", "Win"]];
+const MOD_CODES = /^(Control|Alt|Shift|Meta|OS)(Left|Right)?$/;
+let hkAccel = null;
+
+function keyLabel(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  const names = {
+    Backquote: "`", Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\",
+    Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/",
+    ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
+  };
+  return names[code] || code;
+}
+
+function showCapture(parts, ok) {
+  const box = $("hk-capture");
+  box.replaceChildren();
+  box.classList.toggle("ok", ok);
+  if (!parts.length) {
+    box.textContent = "请按下组合键…";
+    return;
+  }
+  parts.forEach((p, i) => {
+    if (i) {
+      const plus = document.createElement("span");
+      plus.className = "plus";
+      plus.textContent = "+";
+      box.appendChild(plus);
+    }
+    const k = document.createElement("kbd");
+    k.textContent = p;
+    box.appendChild(k);
+  });
+}
+
+function setCandidate(acc) {
+  hkAccel = acc;
+  $("hk-save").disabled = !acc;
+  $("hk-error").textContent = "";
+  const labels = acc.split("+").map((t) => ({ Control: "Ctrl", Super: "Win" }[t] || keyLabel(t)));
+  showCapture(labels, true);
+}
+
+function openHotkeyDialog() {
+  hkAccel = null;
+  $("hk-save").disabled = true;
+  $("hk-error").textContent = "";
+  showCapture([], false);
+  invoke("suspend_hotkey");
+  $("hk-overlay").classList.add("show");
+}
+
+function closeHotkeyDialog(saved = false) {
+  $("hk-overlay").classList.remove("show");
+  if (!saved) invoke("resume_hotkey");
+}
+
+function onHotkeyKeydown(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+    closeHotkeyDialog();
+    return;
+  }
+  const mods = MOD_ORDER.filter(([prop]) => e[prop]);
+  if (MOD_CODES.test(e.code)) {
+    // 只按了修饰键，先显示出来等待主键
+    showCapture(mods.map((m) => m[2]), false);
+    $("hk-save").disabled = true;
+    hkAccel = null;
+    return;
+  }
+  const isFn = /^F([1-9]|1[0-2])$/.test(e.code);
+  if (!mods.length && !isFn) {
+    showCapture([keyLabel(e.code)], false);
+    $("hk-error").textContent = "需要同时按住 Ctrl / Alt / Shift / Win 中的至少一个";
+    $("hk-save").disabled = true;
+    hkAccel = null;
+    return;
+  }
+  setCandidate([...mods.map((m) => m[1]), e.code].join("+"));
+}
+
+$("hotkey-chip").onclick = openHotkeyDialog;
+// 录制中切走窗口时恢复原快捷键，避免热键一直处于暂停状态
+window.addEventListener("blur", () => {
+  if ($("hk-overlay").classList.contains("show")) closeHotkeyDialog();
+});
+$("hk-cancel").onclick = () => closeHotkeyDialog();
+document.querySelectorAll(".hk-presets button").forEach((b) => {
+  b.onclick = () => setCandidate(b.dataset.acc);
+});
+$("hk-save").onclick = async () => {
+  if (!hkAccel) return;
+  try {
+    const label = await invoke("set_hotkey", { accelerator: hkAccel });
+    closeHotkeyDialog(true);
+    await loadInfo();
+    toast(`快捷键已改为 ${label}`, "ok");
+  } catch (err) {
+    $("hk-error").textContent = String(err);
+    $("hk-capture").classList.remove("ok");
+  }
+};
+
 // ---------------- 键盘 ----------------
 document.addEventListener("keydown", (e) => {
+  if ($("hk-overlay").classList.contains("show")) {
+    onHotkeyKeydown(e);
+    return;
+  }
   const editOpen = $("edit-overlay").classList.contains("show");
   const delOpen = $("del-overlay").classList.contains("show");
   if (e.key === "Escape") {

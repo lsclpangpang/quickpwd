@@ -307,3 +307,37 @@ h1 { font-size: 24px; font-weight: 600; letter-spacing: 0.2px; }
 .toast.ok { color: var(--success); }
 .toast.err { color: var(--danger); }
 .btn.primary kbd { background: rgba(255, 255, 255, 0.18); border-color: transparent; color: #fff; }
+
+/* ---------- 快捷键设置 ---------- */
+button.chip { cursor: pointer; border: 1px solid transparent; transition: border-color 0.12s, background 0.12s; }
+button.chip:hover { border-color: rgba(110, 150, 255, 0.4); background: rgba(110, 150, 255, 0.18); }
+button.chip .edit-hint { opacity: 0.7; }
+.hk-capture {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 84px;
+  margin-top: 18px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px dashed var(--border-strong);
+  color: var(--muted);
+  font-size: 13px;
+}
+.hk-capture.ok { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110, 150, 255, 0.12); }
+.hk-capture kbd { height: 34px; min-width: 38px; padding: 0 12px; font-size: 15px; color: var(--text); border-radius: 7px; }
+.hk-capture .plus { color: var(--muted); }
+.hk-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.hk-presets button {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.hk-presets button:hover { border-color: var(--border-strong); color: var(--text); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn.primary:disabled:hover { background: var(--accent); }
+#hk-overlay .dialog-actions { margin-top: 20px; }

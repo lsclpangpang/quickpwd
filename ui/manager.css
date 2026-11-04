@@ -341,3 +341,5 @@ button.chip .edit-hint { opacity: 0.7; }
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn.primary:disabled:hover { background: var(--accent); }
 #hk-overlay .dialog-actions { margin-top: 20px; }
+.hk-note:empty { display: none; }
+.hk-note { margin: -6px 0 12px; color: var(--warn); font-size: 12px; line-height: 1.6; }

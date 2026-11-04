@@ -1,4 +1,6 @@
+mod accel;
 mod clipboard;
+mod hook;
 mod settings;
 mod store;
 
@@ -30,6 +32,8 @@ struct AppState {
     load_error: Mutex<Option<String>>,
     // 当前已注册的热键（accelerator 字符串）
     hotkey: Mutex<Option<String>>,
+    // 当前热键是否由键盘钩子接管（系统保留或被其他程序占用的组合）
+    hotkey_hooked: Mutex<bool>,
     // 启动时用户设置的热键被占用、临时改用备选时的提示
     hotkey_notice: Mutex<Option<String>>,
     appearance: Mutex<String>,
@@ -46,6 +50,7 @@ struct AppInfo {
     version: String,
     hotkey: Option<String>,
     hotkey_label: Option<String>,
+    hotkey_hooked: bool,
     hotkey_notice: Option<String>,
     autostart: bool,
     appearance: String,
@@ -136,7 +141,8 @@ fn app_info(app: AppHandle, state: State<AppState>) -> AppInfo {
     let hotkey = state.hotkey.lock().unwrap().clone();
     AppInfo {
         version: app.package_info().version.to_string(),
-        hotkey_label: hotkey.as_deref().map(hotkey_label),
+        hotkey_label: hotkey.as_deref().map(accel::label),
+        hotkey_hooked: *state.hotkey_hooked.lock().unwrap(),
         hotkey,
         hotkey_notice: state.hotkey_notice.lock().unwrap().clone(),
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
@@ -155,39 +161,54 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     Ok(al.is_enabled().unwrap_or(enabled))
 }
 
-/// 录制新热键期间暂停当前热键，避免按到同一组合时唤出搜索框
+#[derive(Serialize)]
+struct HotkeyResult {
+    label: String,
+    hooked: bool,
+}
+
+/// 开始录制：暂停当前热键，由键盘钩子捕获按键（系统组合也能完整识别）
 #[tauri::command]
-fn suspend_hotkey(app: AppHandle) {
+fn start_hotkey_recording(app: AppHandle) -> Result<(), String> {
     let _ = app.global_shortcut().unregister_all();
+    if hook::start_record() {
+        Ok(())
+    } else {
+        Err("无法安装键盘钩子，请重试".into())
+    }
 }
 
 #[tauri::command]
-fn resume_hotkey(app: AppHandle, state: State<AppState>) {
+fn stop_hotkey_recording(app: AppHandle, state: State<AppState>) {
+    hook::stop_record();
     let current = state.hotkey.lock().unwrap().clone();
     if let Some(acc) = current {
-        let _ = try_register(&app, &acc);
+        if let Ok(hooked) = activate_hotkey(&app, &acc) {
+            *state.hotkey_hooked.lock().unwrap() = hooked;
+        }
     }
 }
 
 #[tauri::command]
-fn set_hotkey(app: AppHandle, state: State<AppState>, accelerator: String) -> Result<String, String> {
-    let shortcut: Shortcut = accelerator.parse().map_err(|e| format!("无法识别的组合键「{accelerator}」: {e}"))?;
-    let gs = app.global_shortcut();
-    let _ = gs.unregister_all();
-    if gs.register(shortcut).is_err() {
-        // 恢复原热键
-        let old = state.hotkey.lock().unwrap().clone();
-        if let Some(old) = old {
-            let _ = try_register(&app, &old);
+fn set_hotkey(app: AppHandle, state: State<AppState>, accelerator: String) -> Result<HotkeyResult, String> {
+    hook::stop_record();
+    let hooked = match activate_hotkey(&app, &accelerator) {
+        Ok(h) => h,
+        Err(e) => {
+            let old = state.hotkey.lock().unwrap().clone();
+            if let Some(old) = old {
+                let _ = activate_hotkey(&app, &old);
+            }
+            return Err(e);
         }
-        return Err(format!("「{}」已被其他程序占用，请换一个组合", hotkey_label(&accelerator)));
-    }
+    };
     let mut cfg = settings::load();
     cfg.hotkey = Some(accelerator.clone());
     settings::save(&cfg)?;
     *state.hotkey.lock().unwrap() = Some(accelerator.clone());
+    *state.hotkey_hooked.lock().unwrap() = hooked;
     *state.hotkey_notice.lock().unwrap() = None;
-    Ok(hotkey_label(&accelerator))
+    Ok(HotkeyResult { label: accel::label(&accelerator), hooked })
 }
 
 #[tauri::command]
@@ -263,43 +284,44 @@ fn apply_launcher_backdrop(w: &WebviewWindow) -> &'static str {
     "solid"
 }
 
-/// "Control+Shift+KeyK" -> "Ctrl + Shift + K"
-fn hotkey_label(acc: &str) -> String {
-    acc.split('+')
-        .map(|t| match t {
-            "Control" => "Ctrl".to_string(),
-            "Super" => "Win".to_string(),
-            "Backquote" => "`".to_string(),
-            t if t.starts_with("Key") && t.len() == 4 => t[3..].to_string(),
-            t if t.starts_with("Digit") && t.len() == 6 => t[5..].to_string(),
-            t => t.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join(" + ")
-}
-
-fn try_register(app: &AppHandle, acc: &str) -> bool {
-    acc.parse::<Shortcut>().map(|sc| app.global_shortcut().register(sc).is_ok()).unwrap_or(false)
-}
-
-/// 先用用户设置的热键，失败再依次尝试备选；返回 (已注册的热键, 提示)
-fn register_hotkey(app: &AppHandle) -> (Option<String>, Option<String>) {
-    let preferred = settings::load().hotkey;
-    if let Some(acc) = &preferred {
-        if try_register(app, acc) {
-            return (Some(acc.clone()), None);
+/// 激活热键：普通组合用 RegisterHotKey；系统保留的组合（Win+…、Alt+…）
+/// 或被其他程序占用时改用键盘钩子接管。返回是否使用了钩子。
+fn activate_hotkey(app: &AppHandle, acc: &str) -> Result<bool, String> {
+    let combo = accel::parse(acc).ok_or_else(|| format!("无法识别的组合键「{acc}」"))?;
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    hook::listen(None);
+    if !accel::needs_hook(&combo) {
+        if let Ok(sc) = acc.parse::<Shortcut>() {
+            if gs.register(sc).is_ok() {
+                return Ok(false);
+            }
         }
     }
-    let fallback = HOTKEY_FALLBACKS.iter().find(|acc| try_register(app, acc)).map(|s| s.to_string());
-    let notice = match (&preferred, &fallback) {
-        (Some(p), Some(f)) => Some(format!(
-            "你设置的「{}」被其他程序占用，已临时改用「{}」",
-            hotkey_label(p),
-            hotkey_label(f)
-        )),
-        _ => None,
-    };
-    (fallback, notice)
+    if hook::listen(Some(combo)) {
+        Ok(true)
+    } else {
+        Err(format!("无法注册「{}」", accel::label(acc)))
+    }
+}
+
+/// 先用用户设置的热键，失败再依次尝试备选；返回 (热键, 是否钩子, 提示)
+fn register_hotkey(app: &AppHandle) -> (Option<String>, bool, Option<String>) {
+    let preferred = settings::load().hotkey;
+    if let Some(acc) = &preferred {
+        if let Ok(hooked) = activate_hotkey(app, acc) {
+            return (Some(acc.clone()), hooked, None);
+        }
+    }
+    for acc in HOTKEY_FALLBACKS {
+        if let Ok(hooked) = activate_hotkey(app, acc) {
+            let notice = preferred.as_deref().map(|p| {
+                format!("你设置的「{}」无法注册，已临时改用「{}」", accel::label(p), accel::label(acc))
+            });
+            return (Some(acc.to_string()), hooked, notice);
+        }
+    }
+    (None, false, None)
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -354,8 +376,10 @@ pub fn run() {
                 Ok(s) => *state.store.lock().unwrap() = s,
                 Err(e) => *state.load_error.lock().unwrap() = Some(e),
             }
-            let (hotkey, notice) = register_hotkey(&handle);
+            hook::init(handle.clone(), toggle_launcher);
+            let (hotkey, hooked, notice) = register_hotkey(&handle);
             *state.hotkey.lock().unwrap() = hotkey;
+            *state.hotkey_hooked.lock().unwrap() = hooked;
             *state.hotkey_notice.lock().unwrap() = notice;
 
             if let Some(w) = app.get_webview_window("launcher") {
@@ -394,8 +418,8 @@ pub fn run() {
             copy_entry,
             app_info,
             set_autostart,
-            suspend_hotkey,
-            resume_hotkey,
+            start_hotkey_recording,
+            stop_hotkey_recording,
             set_hotkey,
             open_manager,
             hide_launcher,

@@ -12,7 +12,7 @@ $("btn-gen").innerHTML = svgIcon("dice");
 $("btn-min").onclick = () => win.minimize();
 $("btn-max").onclick = () => win.toggleMaximize();
 $("btn-close").onclick = () => {
-  if ($("hk-overlay").classList.contains("show")) closeHotkeyDialog();
+  closeHotkeyDialog();
   win.hide();
 };
 
@@ -275,20 +275,25 @@ function toast(text, kind = "") {
 }
 
 // ---------------- 快捷键设置 ----------------
-const MOD_ORDER = [["ctrlKey", "Control", "Ctrl"], ["altKey", "Alt", "Alt"], ["shiftKey", "Shift", "Shift"], ["metaKey", "Super", "Win"]];
-const MOD_CODES = /^(Control|Alt|Shift|Meta|OS)(Left|Right)?$/;
+// 录制由后端键盘钩子完成（Win+Space、Alt+Space 等系统组合不会先被系统吃掉），
+// 通过 hotkey-capture 事件推送按键
 let hkAccel = null;
+let hkOpen = false;
 
-function keyLabel(code) {
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
-  if (/^Digit\d$/.test(code)) return code.slice(5);
+function keyLabel(token) {
+  if (token === "Control") return "Ctrl";
+  if (token === "Super") return "Win";
+  if (/^Key[A-Z]$/.test(token)) return token.slice(3);
+  if (/^Digit\d$/.test(token)) return token.slice(5);
   const names = {
     Backquote: "`", Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\",
     Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/",
     ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
   };
-  return names[code] || code;
+  return names[token] || token;
 }
+
+const accelLabels = (acc) => (acc ? acc.split("+").map(keyLabel) : []);
 
 function showCapture(parts, ok) {
   const box = $("hk-capture");
@@ -315,76 +320,82 @@ function setCandidate(acc) {
   hkAccel = acc;
   $("hk-save").disabled = !acc;
   $("hk-error").textContent = "";
-  const labels = acc.split("+").map((t) => ({ Control: "Ctrl", Super: "Win" }[t] || keyLabel(t)));
-  showCapture(labels, true);
+  $("hk-note").textContent = acc && acc.split("+").includes("Super") && acc.endsWith("Space")
+    ? "Win + Space 原本是系统切换输入法的快捷键，设置后将由 QuickPwd 接管（仍可用 Ctrl + Shift 或点击任务栏切换输入法）"
+    : "";
+  showCapture(accelLabels(acc), true);
 }
 
-function openHotkeyDialog() {
+function clearCandidate(parts, error = "") {
   hkAccel = null;
   $("hk-save").disabled = true;
-  $("hk-error").textContent = "";
-  showCapture([], false);
-  invoke("suspend_hotkey");
+  $("hk-error").textContent = error;
+  $("hk-note").textContent = "";
+  showCapture(parts, false);
+}
+
+async function openHotkeyDialog() {
+  clearCandidate([]);
+  try {
+    await invoke("start_hotkey_recording");
+  } catch (e) {
+    return toast(String(e), "err");
+  }
+  hkOpen = true;
   $("hk-overlay").classList.add("show");
 }
 
 function closeHotkeyDialog(saved = false) {
+  if (!hkOpen) return;
+  hkOpen = false;
   $("hk-overlay").classList.remove("show");
-  if (!saved) invoke("resume_hotkey");
+  if (!saved) invoke("stop_hotkey_recording");
 }
 
-function onHotkeyKeydown(e) {
-  e.preventDefault();
-  e.stopPropagation();
-  if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-    closeHotkeyDialog();
+listen("hotkey-capture", ({ payload }) => {
+  if (!hkOpen) return;
+  const { kind, accelerator } = payload;
+  if (kind === "cancel") return closeHotkeyDialog();
+  if (kind === "confirm") {
+    if (hkAccel) saveHotkey();
     return;
   }
-  const mods = MOD_ORDER.filter(([prop]) => e[prop]);
-  if (MOD_CODES.test(e.code)) {
-    // 只按了修饰键，先显示出来等待主键
-    showCapture(mods.map((m) => m[2]), false);
-    $("hk-save").disabled = true;
-    hkAccel = null;
+  if (kind === "mods") {
+    // 按下修饰键：开始一个新组合
+    clearCandidate(accelLabels(accelerator));
     return;
   }
-  const isFn = /^F([1-9]|1[0-2])$/.test(e.code);
-  if (!mods.length && !isFn) {
-    showCapture([keyLabel(e.code)], false);
-    $("hk-error").textContent = "需要同时按住 Ctrl / Alt / Shift / Win 中的至少一个";
-    $("hk-save").disabled = true;
-    hkAccel = null;
-    return;
-  }
-  setCandidate([...mods.map((m) => m[1]), e.code].join("+"));
-}
+  if (kind === "invalid") return clearCandidate(accelLabels(accelerator), "需要同时按住 Ctrl / Alt / Shift / Win 中的至少一个");
+  if (kind === "reserved") return clearCandidate(accelLabels(accelerator), "这是系统窗口切换 / 关闭的组合，不能使用");
+  setCandidate(accelerator);
+});
 
-$("hotkey-chip").onclick = openHotkeyDialog;
-// 录制中切走窗口时恢复原快捷键，避免热键一直处于暂停状态
-window.addEventListener("blur", () => {
-  if ($("hk-overlay").classList.contains("show")) closeHotkeyDialog();
-});
-$("hk-cancel").onclick = () => closeHotkeyDialog();
-document.querySelectorAll(".hk-presets button").forEach((b) => {
-  b.onclick = () => setCandidate(b.dataset.acc);
-});
-$("hk-save").onclick = async () => {
+async function saveHotkey() {
   if (!hkAccel) return;
   try {
-    const label = await invoke("set_hotkey", { accelerator: hkAccel });
+    const res = await invoke("set_hotkey", { accelerator: hkAccel });
     closeHotkeyDialog(true);
     await loadInfo();
-    toast(`快捷键已改为 ${label}`, "ok");
+    toast(`快捷键已改为 ${res.label}`, "ok");
   } catch (err) {
     $("hk-error").textContent = String(err);
     $("hk-capture").classList.remove("ok");
   }
-};
+}
+
+$("hotkey-chip").onclick = openHotkeyDialog;
+// 录制中切走窗口时恢复原快捷键
+window.addEventListener("blur", () => closeHotkeyDialog());
+$("hk-cancel").onclick = () => closeHotkeyDialog();
+document.querySelectorAll(".hk-presets button").forEach((b) => {
+  b.onclick = () => setCandidate(b.dataset.acc);
+});
+$("hk-save").onclick = saveHotkey;
 
 // ---------------- 键盘 ----------------
 document.addEventListener("keydown", (e) => {
-  if ($("hk-overlay").classList.contains("show")) {
-    onHotkeyKeydown(e);
+  if (hkOpen) {
+    e.preventDefault();
     return;
   }
   const editOpen = $("edit-overlay").classList.contains("show");

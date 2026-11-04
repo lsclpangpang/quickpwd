@@ -101,15 +101,16 @@
   <div class="overlay" id="hk-overlay">
     <div class="dialog">
       <h2>设置唤出快捷键</h2>
-      <p class="dialog-sub">直接按下想要的组合键，需包含 Ctrl / Alt / Shift / Win 之一（F1–F12 可单独使用）</p>
+      <p class="dialog-sub">直接按下想要的组合键，需包含 Ctrl / Alt / Shift / Win 之一（F1–F12 可单独使用）。Esc 取消，Enter 保存</p>
       <div class="hk-capture" id="hk-capture"></div>
       <p class="form-error" id="hk-error"></p>
+      <p class="hk-note" id="hk-note"></p>
       <div class="hk-presets">
         <span>常用：</span>
         <button type="button" data-acc="Alt+Space">Alt + Space</button>
+        <button type="button" data-acc="Super+Space">Win + Space</button>
         <button type="button" data-acc="Control+Alt+Space">Ctrl + Alt + Space</button>
         <button type="button" data-acc="Control+Shift+Space">Ctrl + Shift + Space</button>
-        <button type="button" data-acc="Control+Backquote">Ctrl + `</button>
       </div>
       <div class="dialog-actions">
         <button type="button" class="btn" id="hk-cancel">取消</button>

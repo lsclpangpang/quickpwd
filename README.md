@@ -11,7 +11,8 @@ Windows 上用快捷键唤出的文本速贴工具，交互类似 Alfred / Rayca
 ## 功能
 
 - 全局热键默认 Alt + Space，可在管理窗口左下角点击修改（直接按下想要的组合键）；设置保存在 `%USERPROFILE%\.quickpwd\settings.json`
-- 设置的热键被其他程序占用时，会依次尝试 Alt+Space、Ctrl+Alt+Space、Ctrl+Shift+Space 等备选，并在管理窗口提示
+- 支持 Win + Space、Alt + Space 这类系统保留的组合：这些组合由低层键盘钩子接管（Win + Space 会替代系统的切换输入法），其余组合用系统 RegisterHotKey 注册；键盘钩子只在需要时安装
+- 由键盘钩子接管的热键，在以管理员身份运行的窗口处于前台时不生效（Windows 的权限隔离限制），这种情况下可以以管理员身份运行 QuickPwd
 - 搜索框使用 Win11 Mica / Win10 Acrylic 毛玻璃背景，失焦自动隐藏
 - 复制的内容不进 Win+V 剪贴板历史，也不参与云同步；30 秒后自动清空剪贴板（这期间你自己复制了别的内容就不清）
 - 数据经 Windows DPAPI 加密保存在 `%USERPROFILE%\.quickpwd\store.dat`，只有当前 Windows 账户能解开

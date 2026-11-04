@@ -132,10 +132,12 @@ fn copy_entry(state: State<AppState>, title: String) -> Result<u64, String> {
 
 #[tauri::command]
 fn app_info(app: AppHandle, state: State<AppState>) -> AppInfo {
+    // 先取出再用：同一条语句里两次 lock 同一个 Mutex 会因临时 guard 未释放而死锁
+    let hotkey = state.hotkey.lock().unwrap().clone();
     AppInfo {
         version: app.package_info().version.to_string(),
-        hotkey: state.hotkey.lock().unwrap().clone(),
-        hotkey_label: state.hotkey.lock().unwrap().as_deref().map(hotkey_label),
+        hotkey_label: hotkey.as_deref().map(hotkey_label),
+        hotkey,
         hotkey_notice: state.hotkey_notice.lock().unwrap().clone(),
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
         appearance: state.appearance.lock().unwrap().clone(),
@@ -161,7 +163,8 @@ fn suspend_hotkey(app: AppHandle) {
 
 #[tauri::command]
 fn resume_hotkey(app: AppHandle, state: State<AppState>) {
-    if let Some(acc) = state.hotkey.lock().unwrap().clone() {
+    let current = state.hotkey.lock().unwrap().clone();
+    if let Some(acc) = current {
         let _ = try_register(&app, &acc);
     }
 }
@@ -173,7 +176,8 @@ fn set_hotkey(app: AppHandle, state: State<AppState>, accelerator: String) -> Re
     let _ = gs.unregister_all();
     if gs.register(shortcut).is_err() {
         // 恢复原热键
-        if let Some(old) = state.hotkey.lock().unwrap().clone() {
+        let old = state.hotkey.lock().unwrap().clone();
+        if let Some(old) = old {
             let _ = try_register(&app, &old);
         }
         return Err(format!("「{}」已被其他程序占用，请换一个组合", hotkey_label(&accelerator)));
